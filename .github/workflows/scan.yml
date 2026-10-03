@@ -1,0 +1,65 @@
+name: BSC address-poisoning scan
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"   # weekly
+  workflow_dispatch:
+    inputs:
+      from_block:
+        description: "start block (hex or decimal)"
+        required: true
+        default: "13400000"
+      to_block:
+        description: "end block (hex or decimal)"
+        required: true
+        default: "14000000"
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          # Jan 2023 ~ block 24400000. Extend this matrix month by month up to current head.
+          - { name: m2023_01, from: 24400000, to: 24900000 }
+          - { name: m2023_02, from: 24900001, to: 25400000 }
+          - { name: m2023_03, from: 25400001, to: 25900000 }
+          - { name: m2023_04, from: 25900001, to: 26400000 }
+    env:
+      BLOCKPI_BSC: ${{ secrets.BLOCKPI_BSC }}
+      NODEREAL_BSC: ${{ secrets.NODEREAL_BSC }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Fetch blocks
+        run: python -m src.blocks --from-block ${{ matrix.shard.from }} --to-block ${{ matrix.shard.to }} --out shards/${{ matrix.shard.name }}
+      - name: Detect
+        run: python -m src.detect --in shards/${{ matrix.shard.name }} --out findings/${{ matrix.shard.name }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: findings-${{ matrix.shard.name }}
+          path: |
+            findings/${{ matrix.shard.name }}/
+          retention-days: 30
+
+  merge:
+    needs: fetch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          path: findings
+      - run: python -m src.aggregate --in findings --out eoas_at_risk.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eoas_at_risk.csv
+          path: eoas_at_risk.csv

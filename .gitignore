@@ -1,0 +1,6 @@
+shards/
+findings/
+eoas_at_risk.csv
+.env
+__pycache__/
+*.ndjson
