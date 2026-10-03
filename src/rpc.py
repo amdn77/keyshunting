@@ -32,7 +32,7 @@ def endpoints_from_env(env_path: str = ".env") -> list[str]:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
-            if k.strip().endswith("_BSC"):
+            if k.strip().endswith("_BSC") or ("BSC" in k.upper() and "URL" in k.upper()):
                 eps.extend(_split(v))
     for k in ("BLOCKPI_BSC", "NODEREAL_BSC", "PUBLIC_BSC"):
         eps.extend(_split(os.environ.get(k)))

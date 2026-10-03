@@ -23,9 +23,9 @@ jobs:
         shard:
           # Jan 2023 ~ block 24400000. Extend this matrix month by month up to current head.
           - { name: m2023_01, from: 24400000, to: 24900000 }
-          - { name: m2023_02, from: 24900001, to: 25400000 }
-          - { name: m2023_03, from: 25400001, to: 25900000 }
-          - { name: m2023_04, from: 25900001, to: 26400000 }
+          #- { name: m2023_02, from: 24900001, to: 25400000 }
+          #- { name: m2023_03, from: 25400001, to: 25900000 }
+          #- { name: m2023_04, from: 25900001, to: 26400000 }
     env:
       BLOCKPI_BSC: ${{ secrets.BLOCKPI_BSC }}
       NODEREAL_BSC: ${{ secrets.NODEREAL_BSC }}
