@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 from .rpc import RPCPool, endpoints_from_env
@@ -26,33 +27,54 @@ def fetch_window(pool: RPCPool, start: int, end: int, out_dir: Path, shard_block
         rows: list[str] = []
         for base in range(shard_start, shard_end + 1, BATCH):
             hi = min(base + BATCH - 1, shard_end)
-            try:
-                resp = pool.session.post(
-                    ep,
-                    json=[
-                        {"jsonrpc": "2.0", "id": i, "method": "eth_getBlockByNumber", "params": [hex(base + i), True]}
-                        for i in range(hi - base + 1)
-                    ],
-                    timeout=180,
-                ).json()
-            except Exception as e:
-                print(f"batch getBlock failed @ {base}: {e}")
+            resp = None
+            for attempt in range(8):
+                try:
+                    resp = pool.session.post(
+                        ep,
+                        json=[
+                            {"jsonrpc": "2.0", "id": i, "method": "eth_getBlockByNumber", "params": [hex(base + i), True]}
+                            for i in range(hi - base + 1)
+                        ],
+                        timeout=180,
+                    ).json()
+                    if isinstance(resp, list):
+                        break
+                    # rate-limit or error object -> backoff
+
+                    time.sleep(min(2.0 * (attempt + 1), 20.0))
+                except Exception as e:
+                    print(f"getBlock retry @ {base}: {e}")
+
+                    time.sleep(min(2.0 * (attempt + 1), 20.0))
+            if not isinstance(resp, list):
+                print(f"batch getBlock failed @ {base}: {str(resp)[:200]}")
                 continue
             nums = [int(b["result"]["number"], 16) for b in resp if isinstance(b, dict) and b.get("result")]
             if not nums:
                 print(f"batch getBlock bad response @ {base}: {str(resp)[:200]}")
                 continue
-            try:
-                resp2 = pool.session.post(
-                    ep,
-                    json=[
-                        {"jsonrpc": "2.0", "id": i, "method": "eth_getBlockReceipts", "params": [hex(n)]}
-                        for i, n in enumerate(nums)
-                    ],
-                    timeout=180,
-                ).json()
-            except Exception as e:
-                print(f"batch receipts failed @ {base}: {e}")
+            resp2 = None
+            for attempt in range(8):
+                try:
+                    resp2 = pool.session.post(
+                        ep,
+                        json=[
+                            {"jsonrpc": "2.0", "id": i, "method": "eth_getBlockReceipts", "params": [hex(n)]}
+                            for i, n in enumerate(nums)
+                        ],
+                        timeout=180,
+                    ).json()
+                    if isinstance(resp2, list):
+                        break
+
+                    time.sleep(min(2.0 * (attempt + 1), 20.0))
+                except Exception as e:
+                    print(f"receipts retry @ {base}: {e}")
+
+                    time.sleep(min(2.0 * (attempt + 1), 20.0))
+            if not isinstance(resp2, list):
+                print(f"batch receipts failed @ {base}: {str(resp2)[:200]}")
                 resp2 = []
             recs_by_block: dict[int, list] = {}
             for item in resp2:
