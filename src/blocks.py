@@ -38,10 +38,9 @@ def fetch_window(pool: RPCPool, start: int, end: int, out_dir: Path, shard_block
                         ],
                         timeout=180,
                     ).json()
-                    if isinstance(resp, list):
+                    if isinstance(resp, list) and all(isinstance(b, dict) and b.get("result") for b in resp):
                         break
                     # rate-limit or error object -> backoff
-
                     time.sleep(min(2.0 * (attempt + 1), 20.0))
                 except Exception as e:
                     print(f"getBlock retry @ {base}: {e}")
@@ -65,7 +64,7 @@ def fetch_window(pool: RPCPool, start: int, end: int, out_dir: Path, shard_block
                         ],
                         timeout=180,
                     ).json()
-                    if isinstance(resp2, list):
+                    if isinstance(resp2, list) and all(isinstance(b, dict) and ("result" in b) for b in resp2):
                         break
 
                     time.sleep(min(2.0 * (attempt + 1), 20.0))

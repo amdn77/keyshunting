@@ -22,7 +22,7 @@ jobs:
       matrix:
         shard:
           # One-week slice, Jan 2023 (~140k blocks). Extend the matrix window-by-window.
-          - { name: 2023w01, from: 24400000, to: 24540000 }
+          - { name: 2023d01, from: 24400000, to: 24428799 }
     env:
       BLOCKPI_BSC: ${{ secrets.BLOCKPI_BSC }}
       NODEREAL_BSC: ${{ secrets.NODEREAL_BSC }}
