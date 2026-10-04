@@ -98,6 +98,25 @@ def run(in_dir: Path, out_dir: Path, dust_wei: int = 10**15) -> None:
                 events.append({"kind": "token", "from": frm, "to": to, "value": tr["value"],
                                "token": tr["token"], "tx_hash": tr["tx_hash"], "block": blk["block_number"]})
 
+    # prune token contracts / burn addresses from peer maps
+    token_contracts = {e["token"] for e in events if e["token"] != "BNB"}
+    zero_like = {
+        "0x0000000000000000000000000000000000000000",
+        "0x000000000000000000000000000000000000dead",
+    }
+
+    def is_candidate(a: str) -> bool:
+        return a not in zero_like and a not in token_contracts
+
+    counts = defaultdict(lambda: defaultdict(int), {
+        v: defaultdict(int, {r: c for r, c in recs.items() if is_candidate(r)})
+        for v, recs in counts.items() if is_candidate(v)
+    })
+    touches = {
+        v: {p for p in peers if is_candidate(p)}
+        for v, peers in touches.items() if is_candidate(v)
+    }
+
     # recipients.csv: top recipients per EOA
     with open(out_dir / "recipients.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -112,20 +131,22 @@ def run(in_dir: Path, out_dir: Path, dust_wei: int = 10**15) -> None:
         by_addr[e["from"]].append(e)
         by_addr[e["to"]].append(e)
 
+    def norm(a: str) -> str:
+        return a.lower().replace("0x", "")
+
     findings = []
     for victim, peers in touches.items():
         peers = list(peers)
-        # pre-compute lookalike pairs among peers
-        for i, r in enumerate(peers):
-            for l in peers[i + 1 :]:
-                if looks_like(l, r):
-                    for e in by_addr.get(victim, []):
-                        pass
-        # cheaper: for each event touching victim, check the counterparty against all other peers
+        # hash index keyed by (first3, last4) hex chars for O(1) lookalike lookup
+        key_index: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for p_addr in peers:
+            n = norm(p_addr)
+            key_index[(n[:3], n[-4:])].append(p_addr)
         for e in by_addr.get(victim, []):
             other = e["to"] if e["from"] == victim else e["from"]
-            for r in peers:
-                if r == other or not looks_like(other, r):
+            on = norm(other)
+            for r in key_index.get((on[:3], on[-4:]), []):
+                if r == other:
                     continue
                 attack = None
                 token_auth = e["token"] in AUTHENTIC_TOKENS or e["token"] == "BNB"
