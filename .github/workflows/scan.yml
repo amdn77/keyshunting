@@ -1,51 +1,49 @@
-name: BSC address-poisoning scan
+name: BSC address-poisoning scan (resumable)
 
 on:
   schedule:
-    - cron: "0 3 * * 0"   # weekly
+    - cron: "0 */4 * * *"   # every 4h; resumes incomplete shards, never exceeds job limits
   workflow_dispatch:
-    inputs:
-      from_block:
-        description: "start block (hex or decimal)"
-        required: true
-        default: "13400000"
-      to_block:
-        description: "end block (hex or decimal)"
-        required: true
-        default: "14000000"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bsc-scan
+  cancel-in-progress: false
 
 jobs:
-  fetch:
+  scan:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         shard:
-          # 2023 (block ~24.4M -> ~34.8M) split into 24 half-month slices, each ~433k blocks
-          - { name: 2023s01, from: 24400000, to: 24833332 }
-          - { name: 2023s02, from: 24833333, to: 25266665 }
-          - { name: 2023s03, from: 25266666, to: 25699999 }
-          - { name: 2023s04, from: 25700000, to: 26133332 }
-          - { name: 2023s05, from: 26133333, to: 26566665 }
-          - { name: 2023s06, from: 26566666, to: 26999999 }
-          - { name: 2023s07, from: 27000000, to: 27433332 }
-          - { name: 2023s08, from: 27433333, to: 27866665 }
-          - { name: 2023s09, from: 27866666, to: 28299999 }
-          - { name: 2023s10, from: 28300000, to: 28733332 }
-          - { name: 2023s11, from: 28733333, to: 29166665 }
-          - { name: 2023s12, from: 29166666, to: 29599999 }
-          - { name: 2023s13, from: 29600000, to: 30033332 }
-          - { name: 2023s14, from: 30033333, to: 30466665 }
-          - { name: 2023s15, from: 30466666, to: 30899999 }
-          - { name: 2023s16, from: 30900000, to: 31333332 }
-          - { name: 2023s17, from: 31333333, to: 31766665 }
-          - { name: 2023s18, from: 31766666, to: 32199999 }
-          - { name: 2023s19, from: 32200000, to: 32633332 }
-          - { name: 2023s20, from: 32633333, to: 33066665 }
-          - { name: 2023s21, from: 33066666, to: 33499999 }
-          - { name: 2023s22, from: 33500000, to: 33933332 }
-          - { name: 2023s23, from: 33933333, to: 34366665 }
-          - { name: 2023s24, from: 34366666, to: 34799999 }
+          # Full 2023 (block ~24.4M -> ~34.88M), 24 half-month slices (~437k blocks each)
+          - { name: 2023s01, from: 24400000, to: 24836665 }
+          - { name: 2023s02, from: 24836666, to: 25273331 }
+          - { name: 2023s03, from: 25273332, to: 25709997 }
+          - { name: 2023s04, from: 25709998, to: 26146663 }
+          - { name: 2023s05, from: 26146664, to: 26583329 }
+          - { name: 2023s06, from: 26583330, to: 27019995 }
+          - { name: 2023s07, from: 27019996, to: 27456661 }
+          - { name: 2023s08, from: 27456662, to: 27893327 }
+          - { name: 2023s09, from: 27893328, to: 28329993 }
+          - { name: 2023s10, from: 28329994, to: 28766659 }
+          - { name: 2023s11, from: 28766660, to: 29203325 }
+          - { name: 2023s12, from: 29203326, to: 29639991 }
+          - { name: 2023s13, from: 29639992, to: 30076657 }
+          - { name: 2023s14, from: 30076658, to: 30513323 }
+          - { name: 2023s15, from: 30513324, to: 30949989 }
+          - { name: 2023s16, from: 30949990, to: 31386655 }
+          - { name: 2023s17, from: 31386656, to: 31823321 }
+          - { name: 2023s18, from: 31823322, to: 32259987 }
+          - { name: 2023s19, from: 32259988, to: 32696653 }
+          - { name: 2023s20, from: 32696654, to: 33133319 }
+          - { name: 2023s21, from: 33133320, to: 33569985 }
+          - { name: 2023s22, from: 33569986, to: 34006651 }
+          - { name: 2023s23, from: 34006652, to: 34443317 }
+          - { name: 2023s24, from: 34443318, to: 34880000 }
     env:
       BLOCKPI_BSC: ${{ secrets.BLOCKPI_BSC }}
       NODEREAL_BSC: ${{ secrets.NODEREAL_BSC }}
@@ -56,19 +54,39 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - name: Fetch blocks
-        run: python -m src.blocks --from-block ${{ matrix.shard.from }} --to-block ${{ matrix.shard.to }} --out shards/${{ matrix.shard.name }}
-      - name: Detect
-        run: python -m src.detect --in shards/${{ matrix.shard.name }} --out findings/${{ matrix.shard.name }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: findings-${{ matrix.shard.name }}
-          path: |
-            findings/${{ matrix.shard.name }}/
-          retention-days: 30
+      - name: Restore scan state branch
+        run: |
+          git fetch origin scan-state || true
+          git checkout origin/scan-state -- state results 2>/dev/null || true
+      - name: Scan shard (time-budgeted)
+        continue-on-error: true
+        run: |
+          python -m src.logs_scan \
+            --shard ${{ matrix.shard.name }} \
+            --from-block ${{ matrix.shard.from }} \
+            --to-block ${{ matrix.shard.to }} \
+            --state state/${{ matrix.shard.name }}.json \
+            --results results \
+            --time-budget 14400 \
+            --workers 4
+      - name: Commit state and results
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B scan-state
+          git add -f state results
+          git commit -m "scan ${{ matrix.shard.name }}" || true
+          for i in 1 2 3 4 5; do
+            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" scan-state && break
+            git pull --rebase --autostash origin scan-state || true
+            git add -f state results
+            git commit -m "scan ${{ matrix.shard.name }} (rebase)" || true
+          done
 
   merge:
-    needs: fetch
+    needs: scan
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,11 +94,26 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - uses: actions/download-artifact@v4
-        with:
-          path: findings
-      - run: python -m src.aggregate --in findings --out eoas_at_risk.csv
+      - name: Restore accumulated results
+        run: |
+          git fetch origin scan-state || true
+          git checkout origin/scan-state -- state results 2>/dev/null || true
+      - name: Build comprehensive at-risk CSV
+        run: python -m src.aggregate --in results --out eoas_at_risk.csv
       - uses: actions/upload-artifact@v4
         with:
           name: eoas_at_risk.csv
           path: eoas_at_risk.csv
+      - name: Commit final CSV to scan-state
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B scan-state
+          cp eoas_at_risk.csv results/eoas_at_risk.csv
+          git add -f results/eoas_at_risk.csv
+          git commit -m "update eoas_at_risk.csv" || true
+          for i in 1 2 3 4 5; do
+            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" scan-state && break
+            git pull --rebase --autostash origin scan-state || true
+          done
