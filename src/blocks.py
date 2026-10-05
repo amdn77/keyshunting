@@ -14,8 +14,8 @@ from pathlib import Path
 
 from .rpc import RPCPool, endpoints_from_env
 
-BATCH = 50
-WORKERS = 6
+BATCH = 100
+WORKERS = 8
 
 
 def fetch_batch(pool: RPCPool, base: int, hi: int) -> list[str] | None:

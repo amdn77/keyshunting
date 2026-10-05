@@ -21,11 +21,31 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          # 2023 sampled in 4 quarterly day-slices spanning the year (~1 day each)
-          - { name: 2023q1, from: 24400000, to: 24428799 }
-          - { name: 2023q2, from: 27200000, to: 27228799 }
-          - { name: 2023q3, from: 30000000, to: 30028799 }
-          - { name: 2023q4, from: 33000000, to: 33028799 }
+          # 2023 (block ~24.4M -> ~34.8M) split into 24 half-month slices, each ~433k blocks
+          - { name: 2023s01, from: 24400000, to: 24833332 }
+          - { name: 2023s02, from: 24833333, to: 25266665 }
+          - { name: 2023s03, from: 25266666, to: 25699999 }
+          - { name: 2023s04, from: 25700000, to: 26133332 }
+          - { name: 2023s05, from: 26133333, to: 26566665 }
+          - { name: 2023s06, from: 26566666, to: 26999999 }
+          - { name: 2023s07, from: 27000000, to: 27433332 }
+          - { name: 2023s08, from: 27433333, to: 27866665 }
+          - { name: 2023s09, from: 27866666, to: 28299999 }
+          - { name: 2023s10, from: 28300000, to: 28733332 }
+          - { name: 2023s11, from: 28733333, to: 29166665 }
+          - { name: 2023s12, from: 29166666, to: 29599999 }
+          - { name: 2023s13, from: 29600000, to: 30033332 }
+          - { name: 2023s14, from: 30033333, to: 30466665 }
+          - { name: 2023s15, from: 30466666, to: 30899999 }
+          - { name: 2023s16, from: 30900000, to: 31333332 }
+          - { name: 2023s17, from: 31333333, to: 31766665 }
+          - { name: 2023s18, from: 31766666, to: 32199999 }
+          - { name: 2023s19, from: 32200000, to: 32633332 }
+          - { name: 2023s20, from: 32633333, to: 33066665 }
+          - { name: 2023s21, from: 33066666, to: 33499999 }
+          - { name: 2023s22, from: 33500000, to: 33933332 }
+          - { name: 2023s23, from: 33933333, to: 34366665 }
+          - { name: 2023s24, from: 34366666, to: 34799999 }
     env:
       BLOCKPI_BSC: ${{ secrets.BLOCKPI_BSC }}
       NODEREAL_BSC: ${{ secrets.NODEREAL_BSC }}
