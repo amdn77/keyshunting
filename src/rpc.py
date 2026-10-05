@@ -34,9 +34,9 @@ def endpoints_from_env(env_path: str = ".env") -> list[str]:
             k, v = line.split("=", 1)
             if k.strip().endswith("_BSC") or ("BSC" in k.upper() and "URL" in k.upper()) or "BLOCK_PI" in k.upper() or "BLOCKPI" in k.upper():
                 eps.extend(_split(v))
-    for k in ("BLOCKPI_BSC", "NODEREAL_BSC", "PUBLIC_BSC"):
+    eps.extend(_split(os.environ.get("BSC_ALCHEMY_URL")))
+    for k in ("BLOCKPI_BSC", "NODEREAL_BSC", "PUBLIC_BSC", "BSC_RPC_URL"):
         eps.extend(_split(os.environ.get(k)))
-    eps.extend(_split(os.environ.get("BSC_RPC_URL")))
     if not eps:
         eps = list(DEFAULT_PUBLIC)
     # de-duplicate, keep order

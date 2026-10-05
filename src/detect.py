@@ -62,7 +62,7 @@ def looks_like(l: str, r: str) -> bool:
     if l == r:
         return False
     p, s = similar(l, r)
-    return p >= 3 and s >= 4
+    return p >= 4 and s >= 5
 
 
 def run(in_dir: Path, out_dir: Path, dust_wei: int = 10**15) -> None:
@@ -141,11 +141,11 @@ def run(in_dir: Path, out_dir: Path, dust_wei: int = 10**15) -> None:
         key_index: dict[tuple[str, str], list[str]] = defaultdict(list)
         for p_addr in peers:
             n = norm(p_addr)
-            key_index[(n[:3], n[-4:])].append(p_addr)
+            key_index[(n[:4], n[-5:])].append(p_addr)
         for e in by_addr.get(victim, []):
             other = e["to"] if e["from"] == victim else e["from"]
             on = norm(other)
-            for r in key_index.get((on[:3], on[-4:]), []):
+            for r in key_index.get((on[:4], on[-5:]), []):
                 if r == other:
                     continue
                 attack = None

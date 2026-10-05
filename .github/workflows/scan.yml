@@ -21,11 +21,15 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          # One-week slice, Jan 2023 (~140k blocks). Extend the matrix window-by-window.
-          - { name: 2023d01, from: 24400000, to: 24428799 }
+          # 2023 sampled in 4 quarterly day-slices spanning the year (~1 day each)
+          - { name: 2023q1, from: 24400000, to: 24428799 }
+          - { name: 2023q2, from: 27200000, to: 27228799 }
+          - { name: 2023q3, from: 30000000, to: 30028799 }
+          - { name: 2023q4, from: 33000000, to: 33028799 }
     env:
       BLOCKPI_BSC: ${{ secrets.BLOCKPI_BSC }}
       NODEREAL_BSC: ${{ secrets.NODEREAL_BSC }}
+      BSC_ALCHEMY_URL: ${{ secrets.BSC_ALCHEMY_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

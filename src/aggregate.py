@@ -34,7 +34,24 @@ def run(in_dir: Path, out_csv: Path) -> None:
                 recipients[r["eoa"]].append(r["recipient"])
 
     rows = []
+    # EOA verification cache
+    eoa_cache: dict[str, bool] = {}
+
+    from .verify import is_eoa as _is_eoa
+
+    def is_eoa(addr: str) -> bool:
+        if addr in eoa_cache:
+            return eoa_cache[addr]
+        try:
+            ok = _is_eoa(addr)
+        except Exception:
+            ok = False
+        eoa_cache[addr] = bool(ok)
+        return bool(ok)
+
     for victim, fr in findings.items():
+        if not is_eoa(victim):
+            continue
         recs = sorted(set(recipients.get(victim, [])))
         rows.append(
             {
