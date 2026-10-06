@@ -69,20 +69,21 @@ jobs:
             --results results \
             --time-budget 14400 \
             --workers 4
-      - name: Commit state and results
+      - name: Publish state and results to scan-state branch
         continue-on-error: true
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -B scan-state
-          git add -f state results
-          git commit -m "scan ${{ matrix.shard.name }}" || true
-          for i in 1 2 3 4 5; do
-            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" scan-state && break
-            git pull --rebase --autostash origin scan-state || true
-            git add -f state results
-            git commit -m "scan ${{ matrix.shard.name }} (rebase)" || true
-          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: python scripts/publish_results.py state results
+      - name: Upload shard artifacts (redundancy)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard.name }}
+          path: |
+            state/
+            results/
+          retention-days: 14
 
   merge:
     needs: scan
@@ -106,14 +107,10 @@ jobs:
           path: eoas_at_risk.csv
       - name: Commit final CSV to scan-state
         continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -B scan-state
+          mkdir -p results
           cp eoas_at_risk.csv results/eoas_at_risk.csv
-          git add -f results/eoas_at_risk.csv
-          git commit -m "update eoas_at_risk.csv" || true
-          for i in 1 2 3 4 5; do
-            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" scan-state && break
-            git pull --rebase --autostash origin scan-state || true
-          done
+          python scripts/publish_results.py results

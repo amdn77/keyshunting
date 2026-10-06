@@ -16,11 +16,13 @@ HIGH_ATTACKS = {"tiny_native", "tiny_token"}
 
 
 def severity(rows: list[dict]) -> str:
+    """Confidence tier: repeat attacks + multiple lookalikes = strongest evidence."""
     kinds = {r["attack"] for r in rows}
     n_attackers = len({r["lookalike"] for r in rows})
-    if kinds & CRITICAL_ATTACKS or n_attackers >= 3:
+    n = len(rows)
+    if n >= 10 or n_attackers >= 3 or (n >= 3 and len(kinds) >= 2):
         return "critical"
-    if len(rows) >= 2 or n_attackers >= 2:
+    if n >= 2 or n_attackers >= 2:
         return "high"
     return "low"
 
