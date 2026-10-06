@@ -9,6 +9,7 @@ import argparse
 import csv
 import json
 from collections import defaultdict
+from fnmatch import fnmatch
 from pathlib import Path
 
 CRITICAL_ATTACKS = {"zero_value", "counterfeit_token"}
@@ -27,33 +28,31 @@ def severity(rows: list[dict]) -> str:
     return "low"
 
 
-def _iter_csvs(in_dir: Path, suffix: str):
-    for f in sorted(in_dir.rglob(f"*{suffix}.csv")):
-        if f.name == "eoas_at_risk.csv":
-            continue
-        yield f
+def _iter_csvs(in_dir: Path, kind: str, match: str | None = None):
+    """kind is 'findings' or 'recipients'; matches both legacy and scanner names once."""
+    seen: set[Path] = set()
+    patterns = [f"*_{kind}.csv", f"{kind}*.csv"]
+    for pat in patterns:
+        for f in sorted(in_dir.rglob(pat)):
+            if f in seen or f.name == "eoas_at_risk.csv":
+                continue
+            seen.add(f)
+            if match and not fnmatch(f.name, match + f"*{kind}.csv"):
+                continue
+            yield f
 
 
-def run(in_dir: Path, out_csv: Path, verify: bool = True, verify_limit: int = 500) -> None:
+def run(in_dir: Path, out_csv: Path, verify: bool = True, verify_limit: int = 500, match: str | None = None) -> None:
     findings: dict[str, list[dict]] = defaultdict(list)
     recipients: dict[str, list[str]] = defaultdict(list)
     rec_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
-    for f in _iter_csvs(in_dir, "_findings"):
+    for f in _iter_csvs(in_dir, "findings", match):
         with open(f, encoding="utf-8") as fh:
             for r in csv.DictReader(fh):
                 if r.get("victim"):
                     findings[r["victim"]].append(r)
-    for f in _iter_csvs(in_dir, "findings"):
-        with open(f, encoding="utf-8") as fh:
-            for r in csv.DictReader(fh):
-                if r.get("victim"):
-                    findings[r["victim"]].append(r)
-    for f in _iter_csvs(in_dir, "_recipients"):
-        with open(f, encoding="utf-8") as fh:
-            for r in csv.DictReader(fh):
-                rec_counts[r["eoa"]][r["recipient"]] += int(r.get("count") or 0)
-    for f in _iter_csvs(in_dir, "recipients"):
+    for f in _iter_csvs(in_dir, "recipients", match):
         with open(f, encoding="utf-8") as fh:
             for r in csv.DictReader(fh):
                 if r.get("eoa") and r.get("recipient"):
@@ -123,8 +122,9 @@ def main() -> None:
     p.add_argument("--in", dest="in_dir", type=Path, default=Path("results"))
     p.add_argument("--out", dest="out_csv", type=Path, default=Path("eoas_at_risk.csv"))
     p.add_argument("--no-verify", action="store_true")
+    p.add_argument("--match", default=None, help="shard name prefix filter, e.g. 2023s01")
     a = p.parse_args()
-    run(a.in_dir, a.out_csv, verify=not a.no_verify)
+    run(a.in_dir, a.out_csv, verify=not a.no_verify, match=a.match)
 
 
 if __name__ == "__main__":

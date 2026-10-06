@@ -69,13 +69,16 @@ jobs:
             --results results \
             --time-budget 14400 \
             --workers 4
-      - name: Publish state and results to scan-state branch
+      - name: Compact shard results (per-victim at-risk rows)
+        if: always()
+        run: python -m src.aggregate --in results --out results/${{ matrix.shard.name }}_at_risk.csv --match "${{ matrix.shard.name }}" --no-verify || true
+      - name: Publish state + compact rows
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-        run: python scripts/publish_results.py state results
-      - name: Upload shard artifacts (redundancy)
+        run: python scripts/publish_results.py state/${{ matrix.shard.name }}.json results/${{ matrix.shard.name }}_at_risk.csv || true
+      - name: Upload raw shard artifact (large, redundancy)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -84,6 +87,14 @@ jobs:
             state/
             results/
           retention-days: 14
+      - name: Upload compact at-risk to release
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view scan-data >/dev/null 2>&1 || gh release create scan-data --title "BSC scan data" --notes "Per-shard at-risk CSVs and final combined list" || true
+          test -f results/${{ matrix.shard.name }}_at_risk.csv && gh release upload scan-data results/${{ matrix.shard.name }}_at_risk.csv --clobber || true
 
   merge:
     needs: scan
@@ -95,22 +106,36 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - name: Restore accumulated results
+      - name: Restore accumulated state
         run: |
           git fetch origin scan-state || true
           git checkout origin/scan-state -- state results 2>/dev/null || true
+          mkdir -p results
+      - name: Download shard artifacts from this run
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          path: _artifacts
+          pattern: shard-*
+      - name: Collect compact at-risk files
+        run: |
+          find _artifacts -name "*_at_risk.csv" -exec cp -n {} results/ \; 2>/dev/null || true
+          gh release download scan-data --pattern "*_at_risk.csv" --dir results --clobber 2>/dev/null || true
+          ls results | head
       - name: Build comprehensive at-risk CSV
-        run: python -m src.aggregate --in results --out eoas_at_risk.csv
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m src.merge_compact --in results --out eoas_at_risk.csv
       - uses: actions/upload-artifact@v4
         with:
           name: eoas_at_risk.csv
           path: eoas_at_risk.csv
-      - name: Commit final CSV to scan-state
+      - name: Publish final CSV to release and branch
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          mkdir -p results
-          cp eoas_at_risk.csv results/eoas_at_risk.csv
-          python scripts/publish_results.py results
+          gh release view scan-data >/dev/null 2>&1 || gh release create scan-data --title "BSC scan data" --notes "Per-shard at-risk CSVs and final combined list" || true
+          gh release upload scan-data eoas_at_risk.csv --clobber || true
+          python scripts/publish_results.py results/eoas_at_risk.csv || true

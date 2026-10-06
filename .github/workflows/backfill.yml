@@ -1,0 +1,58 @@
+name: Backfill compact CSVs from a previous scan run
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "workflow run id whose shard-* artifacts to backfill"
+        required: true
+        default: "37394100777"
+
+permissions:
+  contents: write
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      BSC_ALCHEMY_URL: ${{ secrets.BSC_ALCHEMY_URL }}
+      BLOCKPI_BSC: ${{ secrets.BLOCKPI_BSC }}
+      NODEREAL_BSC: ${{ secrets.NODEREAL_BSC }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Download shard artifacts from run
+        run: gh run download ${{ inputs.run_id }} -p "shard-*" -D _art
+      - name: Compact each shard and publish
+        run: |
+          gh release view scan-data >/dev/null 2>&1 || gh release create scan-data --title "BSC scan data" --notes "Per-shard at-risk CSVs and final combined list" || true
+          for d in _art/shard-*; do
+            name=$(basename "$d" | sed 's/^shard-//')
+            echo "== $name =="
+            mkdir -p work/$name
+            cp -r "$d/results" work/$name/ 2>/dev/null || true
+            cp -r "$d/state" work/$name/ 2>/dev/null || true
+            python -m src.aggregate --in work/$name/results --out work/$name/results/${name}_at_risk.csv --match "$name" --no-verify || true
+            test -f work/$name/results/${name}_at_risk.csv && gh release upload scan-data work/$name/results/${name}_at_risk.csv --clobber || echo "no compact rows for $name"
+            if [ -f work/$name/state/${name}.json ]; then
+              python scripts/publish_results.py work/$name/state/${name}.json || true
+            fi
+          done
+      - name: Merge everything into final CSV
+        run: |
+          mkdir -p final
+          gh release download scan-data --pattern "*_at_risk.csv" --dir final --clobber || true
+          python -m src.merge_compact --in final --out eoas_at_risk.csv
+          gh release upload scan-data eoas_at_risk.csv --clobber || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backfill-eoas_at_risk
+          path: eoas_at_risk.csv
+          if-no-files-found: warn
