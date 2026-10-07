@@ -28,7 +28,7 @@ def attempts_for(rank: int, strong: int, medium: int, offset: int, basic: int) -
     if rank < strong + medium:
         return [(3, 2, 20), (3, 1, 6)]
     if offset <= rank < offset + basic:
-        return [(3, 1, 6)]
+        return [(3, 2, 15), (3, 1, 4)]
     return []
 
 
