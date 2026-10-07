@@ -69,7 +69,7 @@ def run(in_dir: Path, out_csv: Path, verify: bool = True, verify_limit: int = 50
             eoa_map = {}
 
     def is_eoa(addr: str) -> bool:
-        return eoa_map.get(addr, True)
+        return eoa_map.get(addr, True) is not False
 
     for victim, fr in findings.items():
         if verify and not is_eoa(victim):
