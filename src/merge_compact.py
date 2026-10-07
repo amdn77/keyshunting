@@ -39,8 +39,17 @@ def run(in_dir: Path, out_csv: Path, verify: bool = True) -> None:
             eoa_map = {}
 
     rows = []
+    dropped = 0
+    unknown = 0
     for eoa, parts in victims.items():
-        if verify and not eoa_map.get(eoa, True):
+        if verify:
+            verdict = eoa_map.get(eoa, None)
+            if verdict is False:
+                dropped += 1
+                continue
+            if verdict is None:
+                unknown += 1
+        if not parts:
             continue
         n = sum(int(p.get("n_poisoning_events") or 0) for p in parts)
         lookalikes = sorted({x for p in parts for x in split(p.get("lookalikes"))})
@@ -88,7 +97,7 @@ def run(in_dir: Path, out_csv: Path, verify: bool = True) -> None:
         )
         w.writeheader()
         w.writerows(rows)
-    print(f"merged {len(rows)} unique at-risk EOAs -> {out_csv}")
+    print(f"merged {len(rows)} unique at-risk EOAs -> {out_csv} (contracts dropped: {dropped}, unknown-kept: {unknown})")
 
 
 def main() -> None:
