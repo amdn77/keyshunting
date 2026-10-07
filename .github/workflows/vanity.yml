@@ -31,6 +31,8 @@ jobs:
     timeout-minutes: 60
     outputs:
       offset: ${{ steps.calc.outputs.offset }}
+      strong: ${{ steps.calc.outputs.strong }}
+      medium: ${{ steps.calc.outputs.medium }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -42,22 +44,30 @@ jobs:
         run: gh release download scan-data -p "eoas_at_risk.csv" -D . --clobber
       - name: Build critical targets
         run: python -m src.vanity_targets --in eoas_at_risk.csv --out critical_targets.csv
-      - name: Determine basic window offset
+      - name: Determine window and phase
         id: calc
         env:
           INPUT_OFFSET: ${{ inputs.offset }}
+          INPUT_STRONG: ${{ inputs.strong_count }}
+          INPUT_MEDIUM: ${{ inputs.medium_count }}
         run: |
-          OFFSET="$INPUT_OFFSET"
-          if [ -z "$OFFSET" ]; then
-            gh release download scan-data -p "vanity_state.json" -D . --clobber 2>/dev/null || true
-            if [ -f vanity_state.json ]; then
-              OFFSET=$(python -c "import json;print(json.load(open('vanity_state.json')).get('offset',0))")
-            else
-              OFFSET=0
+          gh release download scan-data -p "vanity_state.json" -D . --clobber 2>/dev/null || true
+          OFFSET="$INPUT_OFFSET"; STRONG="$INPUT_STRONG"; MEDIUM="$INPUT_MEDIUM"
+          PHASE1=false
+          if [ -f vanity_state.json ]; then
+            if [ -z "$OFFSET" ]; then
+              OFFSET=$(python -c "import json;print(json.load(open('vanity_state.json')).get('offset',0))" 2>/dev/null || echo 0)
             fi
+            PHASE1=$(python -c "import json;print(str(json.load(open('vanity_state.json')).get('phase1_done',False)).lower())" 2>/dev/null || echo false)
           fi
+          [ -z "$OFFSET" ] && OFFSET=0
+          [ -z "$STRONG" ] && STRONG=50
+          [ -z "$MEDIUM" ] && MEDIUM=2000
+          if [ "$PHASE1" = "true" ]; then STRONG=0; MEDIUM=0; fi
           echo "offset=$OFFSET" >> "$GITHUB_OUTPUT"
-          echo "basic window starts at rank $OFFSET"
+          echo "strong=$STRONG" >> "$GITHUB_OUTPUT"
+          echo "medium=$MEDIUM" >> "$GITHUB_OUTPUT"
+          echo "window offset=$OFFSET strong=$STRONG medium=$MEDIUM"
       - name: Publish targets
         run: gh release upload scan-data critical_targets.csv --clobber
       - uses: actions/upload-artifact@v4
@@ -69,7 +79,7 @@ jobs:
   generate:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 350
     strategy:
       fail-fast: false
       matrix:
@@ -104,8 +114,8 @@ jobs:
             --shard ${{ matrix.shard }} \
             --num-shards 20 \
             --cores 4 \
-            --strong-count ${{ inputs.strong_count || 50 }} \
-            --medium-count ${{ inputs.medium_count || 2000 }} \
+            --strong-count ${{ needs.prepare.outputs.strong }} \
+            --medium-count ${{ needs.prepare.outputs.medium }} \
             --offset ${{ needs.prepare.outputs.offset }} \
             --basic-count ${{ inputs.basic_count || 10000 }} \
             --progress progress_${{ matrix.shard }}.json
@@ -149,6 +159,7 @@ jobs:
         env:
           OFFSET: ${{ needs.prepare.outputs.offset }}
           BASIC: ${{ inputs.basic_count || 10000 }}
+          STRONG: ${{ needs.prepare.outputs.strong }}
         run: |
           ROWS=$(python -c "import csv;print(sum(1 for _ in csv.DictReader(open('critical_victims_lookalikes.csv'))))" 2>/dev/null || echo 0)
           if [ "$ROWS" -lt 1 ]; then
@@ -159,8 +170,12 @@ jobs:
           import json, os
           offset = int(os.environ.get("OFFSET") or 0)
           basic = int(os.environ.get("BASIC") or 10000)
-          json.dump({"offset": offset + basic}, open("vanity_state.json", "w"))
-          print("new offset:", offset + basic)
+          strong = int(os.environ.get("STRONG") or 0)
+          state = {"offset": offset + basic}
+          if strong > 0:
+              state["phase1_done"] = True
+          json.dump(state, open("vanity_state.json", "w"))
+          print("new state:", state)
           EOF
           gh release upload scan-data vanity_state.json --clobber
       - uses: actions/upload-artifact@v4
