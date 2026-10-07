@@ -69,9 +69,19 @@ jobs:
             --results results \
             --time-budget 14400 \
             --workers 4
+      - name: Restore existing compact rows for this shard
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download scan-data --pattern "${{ matrix.shard.name }}_at_risk.csv" --dir results --clobber || true
       - name: Compact shard results (per-victim at-risk rows)
         if: always()
-        run: python -m src.aggregate --in results --out results/${{ matrix.shard.name }}_at_risk.csv --match "${{ matrix.shard.name }}" --no-verify || true
+        run: |
+          if ls results/${{ matrix.shard.name }}_findings.csv >/dev/null 2>&1 || ls results/${{ matrix.shard.name }}_recipients.csv >/dev/null 2>&1; then
+            python -m src.aggregate --in results --out results/${{ matrix.shard.name }}_at_risk.csv --match "${{ matrix.shard.name }}" --no-verify || true
+          else
+            echo "no raw findings for ${{ matrix.shard.name }}; keeping existing compact file"
+          fi
       - name: Publish state + compact rows
         continue-on-error: true
         env:
@@ -94,7 +104,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release view scan-data >/dev/null 2>&1 || gh release create scan-data --title "BSC scan data" --notes "Per-shard at-risk CSVs and final combined list" || true
-          test -f results/${{ matrix.shard.name }}_at_risk.csv && gh release upload scan-data results/${{ matrix.shard.name }}_at_risk.csv --clobber || true
+          if [ -s results/${{ matrix.shard.name }}_at_risk.csv ] && [ "$(wc -l < results/${{ matrix.shard.name }}_at_risk.csv)" -gt 1 ]; then
+            gh release upload scan-data results/${{ matrix.shard.name }}_at_risk.csv --clobber
+          else
+            echo "compact file empty/missing; not uploading"
+          fi
 
   merge:
     needs: scan
