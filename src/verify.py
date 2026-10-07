@@ -32,13 +32,13 @@ def is_eoa(address: str, env_path: str = ".env") -> bool:
     return code in ("0x", "0x0")
 
 
-def are_eoas(addresses: list[str], env_path: str = ".env", batch: int = 100, workers: int = 8) -> dict[str, bool]:
+def are_eoas(addresses: list[str], env_path: str = ".env", batch: int = 100, workers: int = 8) -> dict[str, bool | None]:
     """Batch eth_getCode for many addresses; returns addr -> is_eoa."""
     eps = endpoints_from_env(env_path)
     if not eps:
         return {a: True for a in addresses}
     ep = eps[0]
-    out: dict[str, bool] = {}
+    out: dict[str, bool | None] = {}
     chunks = [addresses[i : i + batch] for i in range(0, len(addresses), batch)]
 
     def fetch(chunk: list[str]):
@@ -50,15 +50,24 @@ def are_eoas(addresses: list[str], env_path: str = ".env", batch: int = 100, wor
             try:
                 resp = requests.post(ep, json=payload, timeout=60).json()
                 if isinstance(resp, list):
-                    res = {}
+                    by_id = {r.get("id"): r for r in resp if isinstance(r, dict)}
+                    res: dict[str, bool | None] = {}
+                    retry_needed = False
                     for i, a in enumerate(chunk):
-                        item = next((r for r in resp if r.get("id") == i), None)
-                        code = (item or {}).get("result")
+                        item = by_id.get(i)
+                        if not item or "error" in item or item.get("result") is None:
+                            res[a] = None  # unknown -> keep
+                            retry_needed = True
+                            continue
+                        code = item.get("result")
                         res[a] = code in ("0x", "0x0")
-                    return res
+                    if not retry_needed or attempt == 4:
+                        return res
+                    time.sleep(min(2.0 * (attempt + 1), 15.0))
+                    continue
             except Exception:
                 time.sleep(min(2.0 * (attempt + 1), 15.0))
-        return {a: True for a in chunk}
+        return {a: None for a in chunk}
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         for res in ex.map(fetch, chunks):
