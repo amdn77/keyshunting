@@ -85,8 +85,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libsecp256k1-dev
-          cc -O2 -o vanity vanity/vanity.c -lsecp256k1
-          ./vanity --selftest
+          cc -O2 -o vanity_bin vanity/vanity.c -lsecp256k1
+          ./vanity_bin --selftest
       - name: Download targets
         run: gh release download scan-data -p "critical_targets.csv" -D . --clobber
       - name: Generate lookalikes (shard ${{ matrix.shard }})
@@ -94,7 +94,7 @@ jobs:
           python -m src.vanity_driver \
             --targets critical_targets.csv \
             --out lookalikes_${{ matrix.shard }}.csv \
-            --binary ./vanity \
+            --binary ./vanity_bin \
             --shard ${{ matrix.shard }} \
             --num-shards 20 \
             --cores 4 \
@@ -142,6 +142,11 @@ jobs:
           OFFSET: ${{ needs.prepare.outputs.offset }}
           BASIC: ${{ inputs.basic_count || 10000 }}
         run: |
+          ROWS=$(python -c "import csv;print(sum(1 for _ in csv.DictReader(open('critical_victims_lookalikes.csv'))))" 2>/dev/null || echo 0)
+          if [ "$ROWS" -lt 1 ]; then
+            echo "no lookalike rows produced; not advancing state"
+            exit 0
+          fi
           python - <<'EOF'
           import json, os
           offset = int(os.environ.get("OFFSET") or 0)
