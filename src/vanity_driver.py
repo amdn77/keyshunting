@@ -73,6 +73,7 @@ def run(
     medium: int,
     offset: int,
     basic: int,
+    progress_path: Path | None = None,
 ) -> None:
     tasks = []
     with open(targets_csv, encoding="utf-8") as fh:
@@ -108,7 +109,15 @@ def run(
             done += 1
             if done % 25 == 0:
                 print(f"shard {shard}: {done}/{len(tasks)} done", flush=True)
+            if progress_path and done % 10 == 0:
+                progress_path.write_text(
+                    json.dumps({"shard": shard, "done": done, "total": len(tasks), "updated": int(time.time())})
+                )
     fh.close()
+    if progress_path:
+        progress_path.write_text(
+            json.dumps({"shard": shard, "done": done, "total": len(tasks), "updated": int(time.time())})
+        )
     print(f"shard {shard}: finished {done} tasks -> {out_csv}")
 
 
@@ -124,8 +133,9 @@ def main() -> None:
     p.add_argument("--medium-count", type=int, default=2000)
     p.add_argument("--offset", type=int, default=0)
     p.add_argument("--basic-count", type=int, default=10000)
+    p.add_argument("--progress", type=Path, default=None)
     a = p.parse_args()
-    run(a.targets, a.out, a.binary, a.shard, a.num_shards, a.cores, a.strong_count, a.medium_count, a.offset, a.basic_count)
+    run(a.targets, a.out, a.binary, a.shard, a.num_shards, a.cores, a.strong_count, a.medium_count, a.offset, a.basic_count, a.progress)
 
 
 if __name__ == "__main__":

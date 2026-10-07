@@ -91,6 +91,12 @@ jobs:
         run: gh release download scan-data -p "critical_targets.csv" -D . --clobber
       - name: Generate lookalikes (shard ${{ matrix.shard }})
         run: |
+          ( while true; do
+              sleep 900
+              [ -f progress_${{ matrix.shard }}.json ] && gh release upload scan-data progress_${{ matrix.shard }}.json --clobber 2>/dev/null || true
+              [ -f lookalikes_${{ matrix.shard }}.csv ] && cp lookalikes_${{ matrix.shard }}.csv /tmp/partial_${{ matrix.shard }}.csv && gh release upload scan-data partial_lookalikes_${{ matrix.shard }}.csv --clobber 2>/dev/null || true
+            done ) &
+          UPLOADER=$!
           python -m src.vanity_driver \
             --targets critical_targets.csv \
             --out lookalikes_${{ matrix.shard }}.csv \
@@ -101,7 +107,9 @@ jobs:
             --strong-count ${{ inputs.strong_count || 50 }} \
             --medium-count ${{ inputs.medium_count || 2000 }} \
             --offset ${{ needs.prepare.outputs.offset }} \
-            --basic-count ${{ inputs.basic_count || 10000 }}
+            --basic-count ${{ inputs.basic_count || 10000 }} \
+            --progress progress_${{ matrix.shard }}.json
+          kill $UPLOADER 2>/dev/null || true
       - name: Publish shard results
         if: always()
         run: |
