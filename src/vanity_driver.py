@@ -19,16 +19,16 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-ASSUMED_RATE = 60000  # keys/sec conservative floor for tries caps
+ASSUMED_RATE = 150000  # keys/sec conservative floor (incremental step engine)
 
 
 def attempts_for(rank: int, strong: int, medium: int, offset: int, basic: int) -> list[tuple[int, int, int]]:
     if rank < strong:
-        return [(4, 3, 150), (3, 3, 75), (3, 2, 25)]
+        return [(4, 2, 60), (3, 3, 45), (3, 2, 15)]
     if rank < strong + medium:
-        return [(3, 3, 45), (3, 2, 15)]
+        return [(3, 2, 20), (3, 1, 6)]
     if offset <= rank < offset + basic:
-        return [(3, 2, 10), (3, 1, 3)]
+        return [(3, 1, 6)]
     return []
 
 

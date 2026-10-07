@@ -173,35 +173,69 @@ int main(int argc, char **argv) {
 
     secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
     uint8_t randseed[32];
-    if (getrandom(randseed, 32, 0) == 32) secp256k1_context_randomize(ctx, randseed);
+    if (getrandom(randseed, 32, 0) == 32) (void)secp256k1_context_randomize(ctx, randseed);
 
     rng_t rng;
     rng_seed(&rng);
-    uint8_t sk[32], pub[65], hash[32], addr[20];
+    uint8_t pub[65], hash[32], addr[20];
     char addrhex[41];
     secp256k1_pubkey pk;
     long long tries = 0;
 
-    while (tries < max_tries) {
+    /* Step mode: walk the curve with P := P + G (one base EC mult, then cheap adds).
+       private key for step i is base + i. */
+    uint8_t sk[32];
+    for (;;) {
         rng_bytes(&rng, sk, 32);
-        if (!secp256k1_ec_seckey_verify(ctx, sk)) continue;
-        if (!secp256k1_ec_pubkey_create(ctx, &pk, sk)) continue;
+        sk[0] &= 0x7f; /* keep well below the curve order */
+        if (secp256k1_ec_seckey_verify(ctx, sk)) break;
+    }
+    if (!secp256k1_ec_pubkey_create(ctx, &pk, sk)) { fprintf(stderr, "base pubkey failed\n"); return 3; }
+    uint8_t one[32];
+    memset(one, 0, 32);
+    one[31] = 1;
+    secp256k1_pubkey gpk, tmp;
+    if (!secp256k1_ec_pubkey_create(ctx, &gpk, one)) { fprintf(stderr, "generator pubkey failed\n"); return 3; }
+    uint64_t kacc[4];
+    for (int j = 0; j < 4; j++) {
+        kacc[j] = 0;
+        for (int b = 0; b < 8; b++) kacc[j] = (kacc[j] << 8) | sk[j * 8 + b];
+    }
+
+    while (tries < max_tries) {
         size_t publen = 65;
         secp256k1_ec_pubkey_serialize(ctx, pub, &publen, &pk, SECP256K1_EC_UNCOMPRESSED);
         keccak256(pub + 1, 64, hash);
         memcpy(addr, hash + 12, 20);
         to_hex(addr, 20, addrhex);
         tries++;
-        if (plen > 0 && strncmp(addrhex, prefix, plen) != 0) continue;
-        if (slen > 0 && strncmp(addrhex + 40 - slen, suffix, slen) != 0) continue;
-        char skhex[67];
-        skhex[0] = '0';
-        skhex[1] = 'x';
-        to_hex(sk, 32, skhex + 2);
-        printf("{\"found\":true,\"private_key\":\"%s\",\"address\":\"0x%s\",\"tries\":%lld,\"prefix_len\":%zu,\"suffix_len\":%zu}\n",
-               skhex, addrhex, tries, plen, slen);
-        secp256k1_context_destroy(ctx);
-        return 0;
+        if ((plen == 0 || strncmp(addrhex, prefix, plen) == 0) &&
+            (slen == 0 || strncmp(addrhex + 40 - slen, suffix, slen) == 0)) {
+            char skhex[67];
+            skhex[0] = '0';
+            skhex[1] = 'x';
+            for (int j = 0; j < 4; j++) {
+                for (int b = 0; b < 8; b++) {
+                    uint8_t byte = (uint8_t)((kacc[j] >> (8 * (7 - b))) & 0xff);
+                    static const char *hexd = "0123456789abcdef";
+                    skhex[2 + j * 16 + b * 2] = hexd[byte >> 4];
+                    skhex[2 + j * 16 + b * 2 + 1] = hexd[byte & 0xf];
+                }
+            }
+            skhex[66] = 0;
+            printf("{\"found\":true,\"private_key\":\"%s\",\"address\":\"0x%s\",\"tries\":%lld,\"prefix_len\":%zu,\"suffix_len\":%zu}\n",
+                   skhex, addrhex, tries, plen, slen);
+            secp256k1_context_destroy(ctx);
+            return 0;
+        }
+        /* P := P + G */
+        const secp256k1_pubkey *arr[2] = {&pk, &gpk};
+        if (!secp256k1_ec_pubkey_combine(ctx, &tmp, arr, 2)) { fprintf(stderr, "combine failed\n"); return 3; }
+        pk = tmp;
+        /* k += 1 (256-bit big-endian) */
+        for (int j = 3; j >= 0; j--) {
+            if (++kacc[j]) break;
+        }
     }
     printf("{\"found\":false,\"tries\":%lld,\"prefix_len\":%zu,\"suffix_len\":%zu}\n", tries, plen, slen);
     secp256k1_context_destroy(ctx);
