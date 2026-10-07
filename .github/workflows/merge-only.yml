@@ -1,0 +1,56 @@
+name: Merge compact shard CSVs (merge only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      BSC_ALCHEMY_URL: ${{ secrets.BSC_ALCHEMY_URL }}
+      BLOCKPI_BSC: ${{ secrets.BLOCKPI_BSC }}
+      NODEREAL_BSC: ${{ secrets.NODEREAL_BSC }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Download all per-shard compacts
+        run: |
+          mkdir -p final
+          gh release download scan-data --pattern "*_at_risk.csv" --dir final --clobber
+          rm -f final/eoas_at_risk.csv
+          echo "files: $(ls final | wc -l)"
+          ls -la final
+      - name: Per-file row counts
+        run: |
+          python - <<'EOF'
+          import csv, glob, os
+          total = 0
+          for p in sorted(glob.glob('final/2023s*_at_risk.csv')):
+              n = sum(1 for _ in csv.DictReader(open(p)))
+              total += n
+              print(os.path.basename(p), n, flush=True)
+          print('TOTAL rows:', total)
+          EOF
+      - name: Merge
+        run: python -m src.merge_compact --in final --out eoas_at_risk.csv
+      - name: Sanity check
+        run: |
+          wc -l eoas_at_risk.csv
+          head -2 eoas_at_risk.csv | cut -c1-300
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eoas_at_risk-final
+          path: eoas_at_risk.csv
+      - name: Publish final CSV
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload scan-data eoas_at_risk.csv --clobber
