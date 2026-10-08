@@ -25,7 +25,19 @@ jobs:
       - name: Download all per-shard compacts
         run: |
           mkdir -p final
-          gh release download scan-data --pattern "*_at_risk.csv" --dir final --clobber
+          for pass in 1 2 3; do
+            for i in $(seq 1 24); do
+              f=$(printf "2023s%02d_at_risk.csv" "$i")
+              for attempt in 1 2 3 4 5; do
+                if [ -s "final/$f" ] && [ "$(wc -c < final/$f)" -gt 1000 ]; then break; fi
+                gh release download scan-data -p "$f" -D final --clobber 2>/dev/null && break
+                sleep 5
+              done
+            done
+            COUNT=$(ls final/2023s*_at_risk.csv 2>/dev/null | wc -l)
+            echo "pass $pass: $COUNT/24 compact files present"
+            [ "$COUNT" -ge 24 ] && break
+          done
           rm -f final/eoas_at_risk.csv
           echo "files: $(ls final | wc -l)"
           ls -la final

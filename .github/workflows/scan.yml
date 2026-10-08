@@ -134,8 +134,20 @@ jobs:
       - name: Collect compact at-risk files
         run: |
           find _artifacts -name "*_at_risk.csv" -exec cp -n {} results/ \; 2>/dev/null || true
-          gh release download scan-data --pattern "*_at_risk.csv" --dir results --clobber 2>/dev/null || true
-          ls results | head
+          for pass in 1 2 3; do
+            for i in $(seq 1 24); do
+              f=$(printf "2023s%02d_at_risk.csv" "$i")
+              for attempt in 1 2 3 4 5; do
+                if [ -s "results/$f" ] && [ "$(wc -c < results/$f)" -gt 1000 ]; then break; fi
+                gh release download scan-data -p "$f" -D results --clobber 2>/dev/null && break
+                sleep 5
+              done
+            done
+            COUNT=$(ls results/2023s*_at_risk.csv 2>/dev/null | wc -l)
+            echo "pass $pass: $COUNT/24 compact files present"
+            [ "$COUNT" -ge 24 ] && break
+          done
+          ls -la results/ | head -30
       - name: Build comprehensive at-risk CSV
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -152,7 +152,10 @@ jobs:
           path: shards
       - name: Merge cumulative CSV
         run: |
-          gh release download scan-data -p "critical_victims_lookalikes.csv" -D . --clobber 2>/dev/null || true
+          for attempt in 1 2 3 4 5; do
+            gh release download scan-data -p "critical_victims_lookalikes.csv" -D . --clobber 2>/dev/null && break
+            sleep 5
+          done || true
           python -m src.vanity_merge --new shards --existing critical_victims_lookalikes.csv --out critical_victims_lookalikes.csv
           gh release upload scan-data critical_victims_lookalikes.csv --clobber
       - name: Advance state window
