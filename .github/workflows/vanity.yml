@@ -2,7 +2,7 @@ name: Vanity lookalikes for critical victims
 
 on:
   schedule:
-    - cron: "0 */3 * * *"   # continues basic coverage windows automatically
+    - cron: "0 * * * *"   # hourly; concurrency group serializes actual runs
   workflow_dispatch:
     inputs:
       strong_count:
