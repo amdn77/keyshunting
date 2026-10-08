@@ -1,0 +1,69 @@
+name: Deploy KRT token
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: "bsc (mainnet) or bsc-testnet"
+        default: "bsc-testnet"
+        type: choice
+        options:
+          - bsc-testnet
+          - bsc
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: Build
+        run: forge build
+      - name: Deploy KeyshuntingResearchToken
+        env:
+          DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+        run: |
+          if [ "${{ inputs.network }}" = "bsc" ]; then
+            RPC="${{ secrets.BSC_ALCHEMY_URL }}"
+            CHAIN_ID=56
+          else
+            RPC="https://data-seed-prebsc-1-s1.binance.org:8545"
+            CHAIN_ID=97
+          fi
+          echo "deploying to ${{ inputs.network }} (chain $CHAIN_ID)"
+          OUT=$(forge create contracts/KeyshuntingResearchToken.sol:KeyshuntingResearchToken \
+            --rpc-url "$RPC" --private-key "$DEPLOYER_PRIVATE_KEY" --broadcast 2>&1) || { echo "$OUT"; exit 1; }
+          echo "$OUT"
+          ADDR=$(echo "$OUT" | grep "Deployed to:" | awk '{print $3}')
+          TX=$(echo "$OUT" | grep "Transaction hash:" | awk '{print $3}')
+          DEPLOYER=$(echo "$OUT" | grep "Deployer:" | awk '{print $2}')
+          python3 - "$ADDR" "$TX" "$DEPLOYER" "$CHAIN_ID" <<'EOF'
+          import json, sys
+          addr, tx, deployer, chain = sys.argv[1:5]
+          json.dump({
+              "token": "KeyshuntingResearchToken",
+              "symbol": "KRT",
+              "decimals": 18,
+              "total_supply": "400000000000000000000000000000000",
+              "address": addr,
+              "tx_hash": tx,
+              "deployer": deployer,
+              "chain_id": int(chain),
+          }, open("krt_deployment.json", "w"), indent=2)
+          print(open("krt_deployment.json").read())
+          EOF
+          gh release view scan-data >/dev/null 2>&1 || gh release create scan-data --title "BSC scan data" --notes "research data" || true
+          gh release upload scan-data krt_deployment.json --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: krt_deployment
+          path: krt_deployment.json
+          if-no-files-found: error
