@@ -5,9 +5,10 @@ compiled `vanity` binary (libsecp256k1) across a process pool, and appends
 results to a shard CSV.
 
 Tiers (by global victim rank):
-  strong : rank < --strong-count           attempts [(4,3,180s), (3,3,90s), (3,2,30s)]
-  medium : rank < strong + --medium-count  attempts [(3,3,60s),  (3,2,20s)]
-  basic  : --offset <= rank < offset+basic attempts [(3,2,12s),  (3,1,4s)]
+  ultra  : rank < --ultra-count            attempts [(4,3,240s), (4,2,90s), (3,3,45s)]
+  strong : rank < --strong-count           attempts [(4,2,60s),  (3,3,45s), (3,2,15s)]
+  medium : rank < strong + --medium-count  attempts [(3,2,20s),  (3,1,6s)]
+  basic  : --offset <= rank < offset+basic attempts [(3,1,2s)]
 """
 from __future__ import annotations
 
@@ -22,7 +23,9 @@ from pathlib import Path
 ASSUMED_RATE = 150000  # keys/sec conservative floor (incremental step engine)
 
 
-def attempts_for(rank: int, strong: int, medium: int, offset: int, basic: int) -> list[tuple[int, int, int]]:
+def attempts_for(rank: int, ultra: int, strong: int, medium: int, offset: int, basic: int) -> list[tuple[int, int, int]]:
+    if rank < ultra:
+        return [(4, 3, 240), (4, 2, 90), (3, 3, 45), (3, 2, 20)]
     if rank < strong:
         return [(4, 2, 60), (3, 3, 45), (3, 2, 15)]
     if rank < strong + medium:
@@ -82,6 +85,7 @@ def run(
     shard: int,
     num_shards: int,
     cores: int,
+    ultra: int,
     strong: int,
     medium: int,
     offset: int,
@@ -92,7 +96,7 @@ def run(
     with open(targets_csv, encoding="utf-8") as fh:
         for r in csv.DictReader(fh):
             rank = int(r["rank"])
-            attempts = attempts_for(rank, strong, medium, offset, basic)
+            attempts = attempts_for(rank, ultra, strong, medium, offset, basic)
             if not attempts:
                 continue
             tasks.append((rank, r["victim"], int(r["n_poisoning_events"]), int(r["recipient_rank"]), r["recipient"], attempts))
@@ -198,6 +202,7 @@ def main() -> None:
     p.add_argument("--shard", type=int, required=True)
     p.add_argument("--num-shards", type=int, default=20)
     p.add_argument("--cores", type=int, default=4)
+    p.add_argument("--ultra-count", type=int, default=0)
     p.add_argument("--strong-count", type=int, default=50)
     p.add_argument("--medium-count", type=int, default=2000)
     p.add_argument("--offset", type=int, default=0)
@@ -218,7 +223,7 @@ def main() -> None:
         if not a.targets or not a.targets.exists():
             print("cover mode requires --targets CSV")
             return
-        run(a.targets, a.out, a.binary, a.shard, a.num_shards, a.cores, a.strong_count, a.medium_count, a.offset, a.basic_count, a.progress)
+        run(a.targets, a.out, a.binary, a.shard, a.num_shards, a.cores, a.ultra_count, a.strong_count, a.medium_count, a.offset, a.basic_count, a.progress)
 
 
 if __name__ == "__main__":

@@ -22,8 +22,11 @@ on:
       out_asset:
         description: "cumulative output asset name"
         default: "wave_lookalikes.csv"
+      ultra_count:
+        description: "top ranks receiving ultra attempts (4+3, then 4+2, then 3+3)"
+        default: "0"
       strong_count:
-        description: "top ranks receiving strong attempts (4+3/3+3)"
+        description: "top ranks receiving strong attempts (4+2/3+3/3+2)"
         default: "0"
       medium_count:
         description: "next ranks receiving medium attempts (3+2)"
@@ -101,6 +104,7 @@ jobs:
             --shard ${{ matrix.shard }} \
             --num-shards 20 \
             --cores 4 \
+            --ultra-count ${{ inputs.ultra_count || 0 }} \
             --strong-count ${{ inputs.strong_count || 0 }} \
             --medium-count ${{ inputs.medium_count || 0 }} \
             --offset 0 \
